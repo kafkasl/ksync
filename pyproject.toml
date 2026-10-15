@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ksync"
+dynamic = ["version"]
+description = "Sync Kindle highlights to markdown through a logged-in Chrome"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{name = "Pol Alvarez", email = "pol@answer.ai"}]
+dependencies = ["fastcore>=1.8", "fastcdp>=0.0.18"]
+
+[project.scripts]
+ksync = "ksync.sync:main"
+ksync-auth = "ksync.auth:auth"
+
+[project.urls]
+Homepage = "https://github.com/kafkasl/ksync"
+
+[tool.setuptools.dynamic]
+version = {attr = "ksync.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["ksync"]
