@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kfxlib"
+version = "20260827"
+description = "Amazon KFX ebook parser, vendored unmodified from John Howell's KFX Input calibre plugin"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-3.0-or-later"
+license-files = ["COPYING"]
+authors = [{name = "John Howell", email = "jhowell@acm.org"}]
+dependencies = ["lxml", "pillow"]
+
+[project.urls]
+Homepage = "https://www.mobileread.com/forums/showthread.php?t=291290"
+
+[tool.setuptools.packages.find]
+include = ["kfxlib"]

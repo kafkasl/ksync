@@ -8,7 +8,8 @@ dynamic = ["version"]
 description = "Kindle highlights and notes fetched from Amazon's Kindle services, stored in SQLite"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "Apache-2.0"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 authors = [{name = "Pol Alvarez", email = "pol@answer.ai"}]
 dependencies = ["fastcore>=1.8", "fastlite", "kfxlib", "httpx", "cryptography"]
 

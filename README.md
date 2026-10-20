@@ -21,7 +21,7 @@ ksync talks to Amazon as a registered Kindle device, the same way the Kindle app
 
 ## Install
 
-    pip install -e .
+    uv pip install -e .
 
 ## Registering
 
