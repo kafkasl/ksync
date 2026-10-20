@@ -1,14 +1,22 @@
-"""Kindle highlights and notes, including those in personal documents sent to the Kindle, fetched from Amazon's Kindle services and stored in a SQLite file with the highlighted text resolved.
+"""Kindle highlights and notes for close reading, pulled from Amazon into a local SQLite store.
 
-ksync talks to Amazon as a registered Kindle device, using credentials in `~/.config/ksync/auth.json`; the README says how to obtain them. Annotations carry only positions, so `sync` downloads each annotated document once into `~/.cache/ksync` and resolves the text with `kfxlib`, then stores `books` and `highlights` tables in `ksync.db` in the current folder. Purchased books are left out: their files are DRM protected. Documents that Amazon still serves in the old MOBI format, those sent before late 2022, get their highlights stored without text. `doc()` each function for its parameters.
+    from ksync import *
+    sync()
+    ['Moonwalking with Einstein: 2 new']
 
-- `sync()` fetches the library and every annotation changed since the last sync, stores them, and returns the new highlights and notes.
-- `books()` lists the library as of the last sync.
-- `highlights(book)` returns a book's highlights and notes in reading order, given a `books()` row or part of a title.
+    books()
+    [Book(title='Moonwalking with Einstein', author='Joshua Foer', n=16),
+     Book(title='Los hermanos Karamazov (13_20) (Spanish Edition)', author='Dostoyevski, Fiódor', n=2),
+     Book(title='Remember, Remember', author='Ed Cooke', n=2), ...]
 
-The file is plain SQLite, so query it directly with fastlite or any sqlite tool when the two readers are not enough.
+    hs = highlights('Outlive')
+    print(hs[111])
+    “Cancer, like insanity, seems to increase with the progress of civilization.” | Stanislas Tanchou
+
+`highlights` takes part of a title or a `books()` row and returns the book's highlights oldest first, so the last ones are the newest. `print` gives the whole passage, then the note after ` | `; each has `text` and `note`. Credentials come from `~/.config/ksync/auth.json`, as the README describes. Only personal documents sent to the Kindle are covered.
 """
 
 __all__ = ['books', 'highlights', 'sync']
 
 from ksync.core import books, highlights, sync
+

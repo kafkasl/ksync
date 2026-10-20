@@ -2,12 +2,22 @@
 
 Kindle highlights and notes, fetched from Amazon's Kindle services and stored in a SQLite file with the highlighted text resolved. Personal documents sent to the Kindle are included, which the Kindle web notebook leaves out.
 
-ksync talks to Amazon as a registered Kindle device, the same way the Kindle apps do. Annotations carry only positions, so `sync` downloads each annotated document once into `~/.cache/ksync` and resolves the text with `kfxlib`, vendored under `vendor/` from the KFX Input calibre plugin. Purchased books are left out: their files are DRM protected. Documents that Amazon still serves in the old MOBI format, those sent before late 2022, get their highlights stored without text.
+ksync talks to Amazon as a registered Kindle device, the same way the Kindle apps do. Annotations carry only positions, so `sync` downloads each annotated document once into `~/.cache/ksync` and resolves the text with `kfxlib`, vendored under `vendor/` from the KFX Input calibre plugin. Purchased books are left out: their files are DRM protected. Documents that Amazon only serves in the old MOBI format, mostly ones sent years ago, are skipped, and `sync` says so. The store is `~/.local/share/ksync/ksync.db`.
 
     from ksync import *
-    sync()                     # store into ksync.db, return what is new
+    sync()
+    ['Moonwalking with Einstein: 2 new']
+
     books()
-    highlights('Moonwalking')
+    [Book(title='Moonwalking with Einstein', author='Joshua Foer', n=16),
+     Book(title='Los hermanos Karamazov (13_20) (Spanish Edition)', author='Dostoyevski, Fiódor', n=2),
+     Book(title='Remember, Remember', author='Ed Cooke', n=2), ...]
+
+    hs = highlights('Outlive')
+    print(hs[111])
+    “Cancer, like insanity, seems to increase with the progress of civilization.” | Stanislas Tanchou
+
+`highlights` takes part of a title or a `books()` row and returns the book's highlights oldest first, so the last ones are the newest. `print` gives the whole passage, then the note after ` | `.
 
 ## Install
 

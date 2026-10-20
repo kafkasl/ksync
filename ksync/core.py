@@ -13,10 +13,30 @@ from kfxlib.message_logging import set_logger
 
 AUTH = Path.home()/'.config/ksync/auth.json'
 CACHE = Path.home()/'.cache/ksync'
-DB = 'ksync.db'
+DB = Path.home()/'.local/share/ksync/ksync.db'
 LOG = logging.getLogger('kfxlib')
 LOG.setLevel(logging.ERROR)
-QUERY = r"query ($book: KindleBookIdentifierInput!, $syncToken: String!) { syncAnnotations(book: $book, syncToken: $syncToken) { annotations { highlights { id creationDate lastModifiedDate startPosition endPosition } notes { id creationDate lastModifiedDate startPosition endPosition noteText } deleted } syncState { syncToken isSyncRequired } } }"
+QUERY = r"query ($book: KindleBookIdentifierInput!, $syncToken: String!) { syncAnnotations(book: $book, syncToken: $syncToken) { annotations { highlights { id creationDate lastModifiedDate startPosition endPosition } notes { id creationDate lastModifiedDate startPosition endPosition noteText } } syncState { syncToken isSyncRequired } } }"
+
+class Book:
+    id:str; title:str; author:str; type:str; added:str
+    embedded:str=None # Content id that Amazon's annotation service keys on
+    n = 0 # Number of annotations, set by `books`
+    __repr__ = basic_repr('title,author,n')
+
+class Highlight:
+    book:str; id:str; start:int; end:int; created:str; modified:str
+    text:str # The highlighted passage
+    note:str=None # What the reader typed, if anything
+    def __repr__(self): return f'Highlight({truncstr(self.text, 70)!r}' + (f', note={truncstr(self.note, 50)!r}' if self.note else '') + ')'
+    def __str__(self): return self.text + (f' | {self.note}' if self.note else '')
+    def _repr_markdown_(self): return f'> {self.text}' + (f'\n>\n> **Note:** {self.note}' if self.note else '')
+
+def _db(path):
+    "The `books` and `highlights` tables of the store at `path`, created if missing, with `Book` and `Highlight` rows"
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    d = database(path)
+    return d.create(Book, name='books', pk='id'), d.create(Highlight, name='highlights', pk=('book', 'id'))
 
 def _auth():
     "Device credentials from `AUTH`, with the access token refreshed once it is older than an hour"
@@ -41,7 +61,7 @@ def _get(url, a, **headers):
 def _library(a):
     "Every item in the Kindle library"
     r = _get('https://todo-ta-g7g.amazon.com/FionaTodoListProxy/syncMetaData?item_count=1000', a)
-    return L(dict(id=m.findtext('ASIN'), title=m.findtext('title'), author=', '.join(x.text for x in m.iter('author')), type=m.findtext('cde_contenttype'), added=m.findtext('publication_date'))
+    return L(Book(m.findtext('ASIN'), m.findtext('title'), ', '.join(x.text for x in m.iter('author')), m.findtext('cde_contenttype'), m.findtext('publication_date'))
         for m in ET.fromstring(r.text).iter('meta_data'))
 
 def _manifest(asin, a):
@@ -54,22 +74,24 @@ def _manifest(asin, a):
     kfx = first(res, lambda x: x.get('type') == 'KINDLE_MAIN_BASE')
     return res[0]['id'], kfx and kfx['optimalEndpoint']['directUrl']
 
-def _annotations(book, token, a):
-    "Highlights and notes of `book` changed since `token`, the ids deleted since, and the token for the next call"
-    rows, deleted = L(), []
+def _annotations(book, c):
+    "Every highlight and note of `book`"
+    rows, token = L(), '0'
     while True:
-        v = dict(book=dict(asin=book['id'], contentType='PDOC', embeddedId=book['embedded']), syncToken=token)
-        r = httpx.post('https://sync.datamate.kindle.amazon.dev/graphql', headers={'authorization': f'Bearer {a["access_token"]}'}, json=dict(query=QUERY, variables=v), timeout=60)
+        v = dict(book=dict(asin=book.id, contentType='PDOC', embeddedId=book.embedded), syncToken=token)
+        r = c.post('https://sync.datamate.kindle.amazon.dev/graphql', json=dict(query=QUERY, variables=v), timeout=60)
         j = r.json()
         if j.get('errors'):
             if j['errors'][0]['extensions']['ErrorName'] != 'EMBEDDEDID_NOT_FOUND': raise RuntimeError(j['errors'][0]['message'])
-            return rows, deleted, token
+            return rows
         s = j['data']['syncAnnotations']
-        rows += L(dict(book=book['id'], id=x['id'], kind=k[:-1], start=int(x['startPosition']), end=int(x['endPosition']), note=x.get('noteText'), created=x['creationDate'], modified=x['lastModifiedDate'])
+        rows += L(AttrDict(id=x['id'], start=int(x['startPosition']), end=int(x['endPosition']), created=_when(x['creationDate']), modified=_when(x['lastModifiedDate']), note=x.get('noteText'))
             for k in ('highlights', 'notes') for x in s['annotations'][k])
-        deleted += s['annotations']['deleted']
+        if not s['syncState']['isSyncRequired']: return rows
         token = s['syncState']['syncToken']
-        if not s['syncState']['isSyncRequired']: return rows, deleted, token
+
+def _when(ms): return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ms / 1000))
+
 
 def _text(chunks, start, end):
     "Book text between KFX positions `start` and `end` inclusive"
@@ -78,9 +100,9 @@ def _text(chunks, start, end):
 
 def _chunks(book, a):
     "Content chunks of personal document `book`, downloaded into `CACHE` the first time, or empty when Amazon has no KFX version of it"
-    p = CACHE/f'{book["id"]}.azw8'
+    p = CACHE/f'{book.id}.azw8'
     if not p.exists():
-        url = _manifest(book['id'], a)[1]
+        url = _manifest(book.id, a)[1]
         if not url: return []
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(httpx.get(url, timeout=300).content)
@@ -89,37 +111,59 @@ def _chunks(book, a):
     yj.decode_book()
     return yj.collect_content_position_info()
 
-def _fetch(book, old, a):
-    "Annotations of `book` changed since its row in `old`, filling in its embedded id when first seen"
-    o = old.get(book['id'], {})
-    book['embedded'] = o.get('embedded') or _manifest(book['id'], a)[0]
-    return _annotations(book, o.get('token', '0'), a)
+def _merge(rows):
+    "Annotations `rows` as one per passage: a note goes onto the highlight covering its range, or stands on its own"
+    hls, notes = rows.filter(lambda r: not r.id.startswith('kindle.note')), rows.filter(lambda r: r.id.startswith('kindle.note'))
+    for n in notes:
+        h = first(hls, lambda h: h.start <= n.start and h.end >= n.end)
+        if h: h.note, h.modified = n.note, max(h.modified, n.modified)
+        else: hls.append(n)
+    return hls
+
+def _fetch(book, old, a, c):
+    "Current annotations of `book`, one per passage, filling in its embedded id when first seen"
+    o = old.get(book.id)
+    book.embedded = o.embedded if o else _manifest(book.id, a)[0]
+    return _merge(_annotations(book, c))
 
 def sync(db=DB): # SQLite file to fill with `books` and `highlights` tables
-    "Fetch the library and every annotation changed since the last sync, store them, and return the new highlights and notes"
-    a, d, new = _auth(), database(db), L()
-    old = {b['id']: b for b in d.t.books()} if 'books' in d.t else {}
-    lib = _library(a).filter(lambda b: b['type'] == 'PDOC')
-    for b, (rows, deleted, token) in zip(lib, parallel(_fetch, lib, old=old, a=a, threadpool=True)):
-        b['token'] = token
-        if rows:
-            chunks = _chunks(b, a)
-            for r in rows: r['text'] = _text(chunks, r['start'], r['end']) if chunks else None
-            d.t.highlights.upsert_all(rows, pk=('book', 'id'))
-            new += rows
-        for i in deleted: d.t.highlights.delete_where('book=? and id=?', (b['id'], i))
-    d.t.books.upsert_all(lib, pk='id')
+    "Fetch the library and the current annotations of every book, replace the store with them, and say how many new ones each book got"
+    a, (bt, ht), new = _auth(), _db(db), L()
+    old = {b.id: b for b in bt()}
+    lib = _library(a).filter(lambda b: b.type == 'PDOC')
+    with httpx.Client(headers={'authorization': f'Bearer {a["access_token"]}'}) as c:
+        fetched = parallel(_fetch, lib, old=old, a=a, c=c, threadpool=True, n_workers=32)
+    for b, rows in zip(lib, fetched):
+        had = {h.id: h for h in ht('book=?', [b.id])}
+        kept = {r.id for r in rows if r.id in had and (had[r.id].start, had[r.id].end) == (r.start, r.end)}
+        fresh = rows.filter(lambda r: r.id not in kept)
+        chunks = _chunks(b, a) if fresh else []
+        if fresh and not chunks:
+            new.append(f'{b.title}: {len(fresh)} skipped, Amazon has no KFX version of it')
+            continue
+        if fresh: new.append(f'{b.title}: {len(fresh)} new')
+        hls = L(Highlight(b.id, r.id, r.start, r.end, r.created, r.modified, had[r.id].text if r.id in kept else _text(chunks, r.start, r.end), r.note)
+            for r in rows)
+        ht.delete_where('book=?', [b.id])
+        if hls: ht.insert_all(hls)
+    bt.upsert_all(lib, pk=bt.pks)
     return new
 
 def books(db=DB): # SQLite file written by `sync`
-    "The library as of the last `sync`, most recently added first"
-    return L(database(db).t.books(order_by='added desc'))
+    "Books with annotations as of the last `sync`, most recently annotated first, with their number of annotations in `n`"
+    bt, ht = _db(db)
+    res = L()
+    for r in ht.db.q('select book, count(*) n, max(modified) last from highlights group by book order by last desc'):
+        b = bt[r['book']]
+        b.n = r['n']
+        res.append(b)
+    return res
 
 def highlights(book, # A row from `books`, or part of a title
     db=DB, # SQLite file written by `sync`
 ):
-    "Highlights and notes of `book`, in reading order"
-    t = database(db).t
-    bid = book['id'] if isinstance(book, dict) else first(t.books('title like ?', [f'%{book}%']))['id']
-    return L(t.highlights('book=?', [bid], order_by='start'))
+    "Highlights and notes of `book`, oldest first, so the last ones are the newest"
+    bt, ht = _db(db)
+    bid = book.id if isinstance(book, Book) else first(bt('title like ?', [f'%{book}%'])).id
+    return L(ht('book=?', [bid], order_by='created'))
 
